@@ -1,0 +1,364 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+public class Edge {
+    public CircleController Object { get; set; }
+    public float Xpos { get; set; }
+    public bool IsLeft { get; set; }
+
+    public Edge(GameObject edgeObject, bool _IsLeft){
+        Object = edgeObject.GetComponent<CircleController>();
+        if((IsLeft = _IsLeft) == true)
+        {
+            Xpos = edgeObject.transform.position.x-Object.radius;
+            Object.OnPositionXChanged.AddListener(value => Xpos = value-Object.radius);
+        } else {
+            Xpos = edgeObject.transform.position.x+Object.radius;
+            Object.OnPositionXChanged.AddListener(value => Xpos = value+Object.radius);
+        }
+    }
+}
+
+public class CollisionManager : MonoBehaviour
+{
+    [Header("Collision Test Settings :")]
+    public float speed = 10f;
+    public float radius = 1f;
+    public int numberOfCircles = 100;
+    public GameObject CirclePrefab;
+
+    public DataPlotter DataCharts;
+
+    // types of Collision Algorithm
+    public enum cAlg { builtin, basic, sorted, sap ,sat, hash};
+
+    // Data stucture for cAlg.builtin, basic and sorted
+    public static List<GameObject> circles = new();
+
+    // Data stucture for cAlg.sap
+    HashSet<CircleController> touching = new ();
+    private readonly List<Edge> edges = new();
+
+    // Data stucture for cAlg.hash
+    public float cellSize = 1.0f; 
+    public List<CircleController> objects = new(); 
+    private Dictionary<Vector2Int, List<int>> grid = new();
+    private List<Vector3> positions = new();
+
+    public static Vector2 BoxSize = new(150, 100);
+    public static int nCollissionChecks = 0; 
+    private bool randomRadius = false;
+
+    // Used for changing "to be tested" algorithm
+    static public cAlg curr = cAlg.builtin;
+
+    public void RunBuiltin()                { RunTest(cAlg.builtin); }
+    public void RunCustomCheckEverything()  { RunTest(cAlg.basic); }
+    public void RunCustomSorted()           { RunTest(cAlg.sorted); }
+    public void RunCustomSAP()              { RunTest(cAlg.sap); }
+    public void RunCustomHash()             { RunTest(cAlg.hash); }
+    public void ToggleRandRad()             { randomRadius = !randomRadius; }
+    
+    public void RunTest(cAlg col){
+
+        ClearCircles(curr);
+        curr = col;
+        SpawnCircles(CirclePrefab, curr);
+        
+        // Reset data in both charts
+        DataCharts.FPSChart.GetSerie(col.ToString()).ClearData();
+        DataCharts.nCollissionChart.GetSerie(col.ToString()).ClearData();
+        DataCharts.elapsedTime = 0;
+        DataCharts.StartRecording = true;
+    }
+
+    void Update(){
+        nCollissionChecks = 0;
+
+        if(curr == cAlg.basic){
+
+            // this runs in O(n^2) and is bad
+            for (int i = 0; i < circles.Count; i++) {
+                var c1 = circles[i].GetComponent<CircleController>();
+
+                for (int j = i + 1; j < circles.Count; j++) {
+                    var c2 = circles[j].GetComponent<CircleController>();
+
+                    nCollissionChecks++;
+                    
+                    // Check for collicion between circles
+                    if (CheckCircleCollision(c1, c2)) {
+
+                        // make sure they bounce of each other
+                        Bounce(c1, c2);
+                    }
+                }
+            }
+        }
+        else if(curr == cAlg.sorted){
+            // sort by min x //  O(n log n)
+            circles.Sort((c1, c2) => c1.transform.position.x.CompareTo(c2.transform.position.x));
+
+            // O(n + m)
+            for (int i = 0; i < circles.Count; i++) {
+                var c1 = circles[i].GetComponent<CircleController>();
+
+                // O(1) at best; O(m/n) on average; O(n) at worst
+                for (int j = i + 1; j < circles.Count; j++) {
+                    var c2 = circles[j].GetComponent<CircleController>();
+
+                    if(c2.transform.position.x-c2.radius > c1.transform.position.x+c1.radius){
+                        continue;
+                    }
+                    nCollissionChecks++;
+
+                    // Check for collicion between circles
+                    if (CheckCircleCollision(c1, c2)) {
+
+                        // make sure they bounce of each other
+                        Bounce(c1, c2);
+                    }
+                }
+            }
+        }
+        else if(curr == cAlg.sap){
+
+            InsertionSort(edges);
+
+            foreach (var edge in edges)
+            {
+                nCollissionChecks++;
+                if (edge.IsLeft)
+                {
+                    // Check for overlap with all objects currently in the "touching" set
+                    foreach (var other in touching)
+                    {
+                        if (edge.Object != other)
+                            OnOverlapX(other, edge.Object);
+                    }
+                    touching.Add(edge.Object);
+                }
+                else
+                {
+                    touching.Remove(edge.Object);
+                }
+            }
+        }
+        else if (curr == cAlg.hash)
+        {
+
+            // Clear grid and position cache
+            grid.Clear();
+            positions.Clear();
+
+            // Populate the grid with objects
+            for(int i = 0; i < objects.Count; i++)
+            {
+                CircleController circle = objects[i];
+                Vector3 position = circle.transform.position;
+                positions.Add(position);
+
+                Vector2Int cell = GetGridCell(position);
+                if (!grid.TryGetValue(cell, out var objectList))
+                {
+                    objectList = new List<int>();
+                    grid[cell] = objectList;
+                }
+
+                objectList.Add(i);
+            }
+
+            // Check collisions
+            for (int i = 0; i < objects.Count; i++)
+            {
+                CircleController circle = objects[i];
+                Vector2Int cell = GetGridCell(positions[i]);
+                CheckCollisions(circle, cell);
+            }
+        }
+    }
+
+    public void SpawnCircles(GameObject circlePrefab, cAlg testAlg)
+    {
+        for (int i = 0; i < numberOfCircles; i++)
+        {
+            // generate Random values
+            float randRadius = randomRadius ? Random.Range(0.1f, 4f) : radius;
+            Vector2 randDirection = Random.insideUnitCircle * speed;
+            Vector2 randPos = new(Random.Range(0, BoxSize.x), Random.Range(0, BoxSize.y));
+            
+            // Create Object
+            GameObject newCircle = Instantiate(circlePrefab, randPos, Quaternion.identity);
+            newCircle.AddComponent<CircleController>().Init(randDirection, randRadius);
+
+            // enable unity components
+            if(testAlg != cAlg.builtin){
+                newCircle.GetComponent<CircleCollider2D>().enabled = false;
+                newCircle.GetComponent<Rigidbody2D>().simulated = false;
+            } else {
+                newCircle.GetComponent<Rigidbody2D>().velocity = randDirection;
+            }
+
+            switch(testAlg){
+                case cAlg.sap:
+                    edges.Add(new Edge(newCircle,true)); // left
+                    edges.Add(new Edge(newCircle,false)); // right
+                    break;
+                case cAlg.hash:
+                    objects.Add(newCircle.GetComponent<CircleController>()); 
+                    break;
+                default: 
+                    circles.Add(newCircle); 
+                    break;
+            }
+        }
+    }
+
+    // make sure to destroy the gameobjects from the "previous test;
+    public void ClearCircles(cAlg testedAlg)
+    {   
+        switch(testedAlg){
+            case cAlg.sap: 
+                foreach(var c in edges){
+                    Destroy(c.Object.gameObject);
+                }
+                edges.Clear(); 
+                break;
+            case cAlg.hash: 
+                foreach(var c in objects){
+                    Destroy(c.gameObject);
+                }
+                objects.Clear(); 
+                break;
+            default: 
+                foreach(var c in circles){
+                    Destroy(c);
+                }
+                circles.Clear();
+            break;
+        }
+    }
+    
+
+    
+    
+    /*******************************************************************************
+        Basic (naive) 
+            Implementation of the basic Collision detection algorithm
+    *******************************************************************************/
+    private bool CheckCircleCollision(CircleController circle1, CircleController circle2){
+        float distanceSquared = (circle1.transform.position - circle2.transform.position).sqrMagnitude;
+        float radius = circle1.radius + circle2.radius;
+        float radiusSq = radius * radius;
+        return distanceSquared <= radiusSq;
+    }   
+
+    /*******************************************************************************
+        Sweep and Prune 
+            Implementation of the Sweep and Prune Collision detection algorithm
+    *******************************************************************************/
+    private void OnOverlapX(CircleController c1, CircleController c2){
+        if(Vector2.Distance(c1.transform.position, c2.transform.position) < c1.radius + c2.radius){
+            Bounce(c1, c2);
+        }
+    }
+
+    // Insertion Sort for a List of Edge objects
+    public static void InsertionSort(List<Edge> edges)
+    {
+        for (int i = 1; i < edges.Count; i++)
+        {
+            for (int j = i - 1; j >= 0; j--)
+            {
+                // Compare the 'x' property of adjacent edges
+                if (edges[j].Xpos < edges[j + 1].Xpos)
+                {
+                    break;
+                }
+
+                // Swap edges[j] and edges[j + 1] if necessary
+                var temp = edges[j];
+                edges[j] = edges[j + 1];
+                edges[j + 1] = temp;
+            }
+        }
+    }
+    /*******************************************************************************
+        Grid Hashing 
+        Implementation of the Grid Hashing Collision detection algorithm
+    *******************************************************************************/
+
+    // Convert world position to grid cell
+    Vector2Int GetGridCell(Vector3 position)
+    {
+        return new Vector2Int(
+            Mathf.FloorToInt(position.x / cellSize),
+            Mathf.FloorToInt(position.y / cellSize)
+        );
+    }
+
+    // Check collisions for an object in its current cell and neighboring cells
+    void CheckCollisions(CircleController circle, Vector2Int cell)
+    {
+        foreach (Vector2Int neighborCell in GetNeighboringCells(cell))
+        {
+            if (grid.TryGetValue(neighborCell, out var objectList))
+            {
+                foreach (var otherCircleIndex in objectList)
+                {
+                    CircleController otherCircle = objects[otherCircleIndex];
+
+                    // Avoid duplicate checks and self-checks
+                    if (circle == otherCircle || circle.transform.GetSiblingIndex() >= otherCircle.transform.GetSiblingIndex())
+                        continue;
+
+                    nCollissionChecks++;
+
+                    if (CheckCircleCollision(circle, otherCircle))
+                    {
+                        Bounce(circle, otherCircle);
+                    }
+                }
+            }
+        }
+    }
+
+    // Get neighboring cells (including the current cell)
+    IEnumerable<Vector2Int> GetNeighboringCells(Vector2Int cell)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int y = -1; y <= 1; y++)
+            {
+                yield return new Vector2Int(cell.x + x, cell.y + y);
+            }
+        }
+    }
+
+
+    /*******************************************************************************
+        Bounce implementation 
+            Implementation of "bounce" mechanic for circles
+    *******************************************************************************/
+    static public void Bounce(CircleController circle1, CircleController circle2){
+        // Calculate the normal and relative velocity
+        Vector2 normal = (circle1.transform.position - circle2.transform.position).normalized;
+        Vector2 relativeVelocity = circle1.velocity - circle2.velocity;
+
+        // Calculate the relative velocity along the normal
+        float velocityAlongNormal = Vector2.Dot(relativeVelocity, normal);
+
+        // Only apply a response if objects are moving towards each other
+        if (velocityAlongNormal < 0)
+        {
+            // Calculate the impulse scalar based on the bounce factor (set to 1 for perfect bounce)
+            float bounceFactor = 1f;  // 1.0 means perfect reflection
+            float impulse = -(1 + bounceFactor) * velocityAlongNormal;
+            impulse /= (1 / circle1.radius + 1 / circle2.radius);  // Account for mass (radius in this case)
+
+            // Apply the impulse to both objects' velocities
+            circle1.velocity += impulse * normal / circle1.radius;  // Scale by mass (radius)
+            circle2.velocity -= impulse * normal / circle2.radius;
+        }  
+    }
+}
