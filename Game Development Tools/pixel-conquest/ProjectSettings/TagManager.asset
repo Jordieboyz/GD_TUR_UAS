@@ -1,0 +1,64 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!78 &1
+TagManager:
+  serializedVersion: 2
+  tags:
+  - Tilemap
+  - Troop
+  - Territory
+  - TileSelect
+  - popup
+  - territoryBorder
+  layers:
+  - Default
+  - TransparentFX
+  - Ignore Raycast
+  - 
+  - Water
+  - UI
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  m_SortingLayers:
+  - name: Default
+    uniqueID: 0
+    locked: 0
+  - name: Map
+    uniqueID: 677125277
+    locked: 0
+  - name: Territory
+    uniqueID: 2839974669
+    locked: 0
+  - name: Troops
+    uniqueID: 2457820755
+    locked: 0
+  - name: MapPopup
+    uniqueID: 1068219603
+    locked: 0
+  - name: UI
+    uniqueID: 3986735485
+    locked: 0
